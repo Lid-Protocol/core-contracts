@@ -18,7 +18,7 @@
     "mocha": "^7.1.2",
     "process-argv": "^1.0.0"
   },
-  "name": "@lid/core-contract",
+  "name": "@lid-protocol/core-contracts",
   "version": "1.0.0",
   "main": "config.js",
   "directories": {
