@@ -13,12 +13,9 @@ const Token = contract.fromArtifact("Token");
 const TeamLock = contract.fromArtifact("LidTimeLock");
 const DaoLock = contract.fromArtifact("LidTimeLock");
 const LidSimplifiedPresale = contract.fromArtifact("LidSimplifiedPresale");
-const LidSimplifiedPresaleRedeemer = contract.fromArtifact(
-  "LidSimplifiedPresaleRedeemer"
-);
-const LidSimplifiedPresaleTimer = contract.fromArtifact(
-  "LidSimplifiedPresaleTimer"
-);
+const LidSimplifiedPresaleRedeemer = contract.fromArtifact("LidSimplifiedPresaleRedeemer");
+const LidSimplifiedPresaleTimer = contract.fromArtifact("LidSimplifiedPresaleTimer");
+const LidSimplifiedPresaleAccess = contract.fromArtifact("LidSimplifiedPresaleAccess");
 
 const owner = accounts[0];
 const depositors = [
@@ -43,6 +40,7 @@ describe("LidSimplifiedPresale", function () {
     this.Presale = await LidSimplifiedPresale.new();
     this.Redeemer = await LidSimplifiedPresaleRedeemer.new();
     this.Timer = await LidSimplifiedPresaleTimer.new();
+    this.Access = await LidSimplifiedPresaleAccess.new();
 
     await this.Token.initialize(TOTAL_TOKENS, initialTokenHolder);
     await this.Redeemer.initialize(
@@ -55,7 +53,7 @@ describe("LidSimplifiedPresale", function () {
     );
     await this.Presale.initialize(
       config.presale.maxBuyPerAddress,
-      config.presale.maxBuyWithoutWhitelisting,
+      // config.presale.maxBuyWithoutWhitelisting,
       config.presale.uniswapEthBP,
       config.presale.lidEthBP,
       config.presale.referralBP,
@@ -63,6 +61,7 @@ describe("LidSimplifiedPresale", function () {
       owner,
       this.Timer.address,
       this.Redeemer.address,
+      this.Access.address,
       // config.presale.token,
       this.Token.address,
       config.presale.uniswapRouter,
@@ -81,36 +80,6 @@ describe("LidSimplifiedPresale", function () {
         config.presale.tokenDistributionBP.team,
       ]
     );
-  });
-
-  describe("Stateless", function () {
-    describe("setWhitelist", async function () {
-      it("should revert for non-owner", async function () {
-        await expectRevert(
-          this.Presale.setWhitelist(depositors[0], true, {
-            from: depositors[0],
-          }),
-          "Ownable: caller is not the owner"
-        );
-      });
-
-      it("should whitelist non whitelisted account", async function () {
-        const whitelist = await this.Presale.whitelist(depositors[0]);
-        await this.Presale.setWhitelist(depositors[0], true, {
-          from: owner,
-        });
-        expect(whitelist).to.equal(false);
-        expect(await this.Presale.whitelist(depositors[0])).to.equal(true);
-      });
-      it("should unwhitelist account", async function () {
-        const whitelist = await this.Presale.whitelist(depositors[0]);
-        await this.Presale.setWhitelist(depositors[0], false, {
-          from: owner,
-        });
-        expect(whitelist).to.equal(true);
-        expect(await this.Presale.whitelist(depositors[0])).to.equal(false);
-      });
-    });
   });
 
   describe("State: Before Presale Start", function () {
