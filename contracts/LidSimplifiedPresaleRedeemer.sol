@@ -92,6 +92,23 @@ contract LidSimplifiedPresaleRedeemer is Initializable, Ownable {
         totalShares = totalShares.add(sharesToAdd);
     }
 
+    function updateBonus(
+        uint[] calldata _bonusRangeStart,
+        uint[] calldata _bonusRangeBP
+    ) external onlyOwner {
+        require(
+            _bonusRangeStart.length == _bonusRangeBP.length,
+            "Must have equal values for bonus range start and BP"
+        );
+        require(_bonusRangeStart.length <= 10, "Cannot have more than 10 items in bonusRange");
+        for (uint i = 0; i < _bonusRangeStart.length; ++i) {
+            bonusRangeStart.push(_bonusRangeStart[i]);
+        }
+        for (uint i = 0; i < _bonusRangeBP.length; ++i) {
+            bonusRangeBP.push(_bonusRangeBP[i]);
+        }
+    }
+
     function calculateRatePerEth(uint totalPresaleTokens, uint depositEth, uint hardCap) external view returns (uint) {
 
         uint tokensPerEtherShare = totalPresaleTokens

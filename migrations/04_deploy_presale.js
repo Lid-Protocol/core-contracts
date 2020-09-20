@@ -3,10 +3,10 @@ const { add, push, create } = scripts;
 const {publicKey} = require("../privatekey")
 
 async function deploy(options) {
-  add({ contractsData: [{ name: 'LidSimplifiedPresaleRedeemer', alias: 'LidSimplifiedPresaleRedeemer' }] });
+  add({ contractsData: [{ name: 'LidSimplifiedPresale', alias: 'LidSimplifiedPresale' }] });
   options.force = true;
   await push(options);
-  await create(Object.assign({ contractAlias: 'LidSimplifiedPresaleRedeemer' }, options));
+  await create(Object.assign({ contractAlias: 'LidSimplifiedPresale' }, options));
 }
 
 module.exports = function(deployer, networkName, accounts) {

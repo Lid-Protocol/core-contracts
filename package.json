@@ -18,13 +18,13 @@
     "mocha": "^7.1.2",
     "process-argv": "^1.0.0"
   },
-  "name": "@lid-protocol/core-contracts",
+  "name": "lid-simplified-presale-contracts",
   "version": "1.0.0",
   "main": "config.js",
   "directories": {
     "test": "test"
   },
-  "author": "LID Protocol",
-  "license": "Unlicensed",
-  "description": "The Liquidity Dividends Protocol uses new technology that provides solutions for depositing Liquidity into Uniswap. Certified LID Presales now LIVE! $LID"
+  "author": "",
+  "license": "ISC",
+  "description": ""
 }

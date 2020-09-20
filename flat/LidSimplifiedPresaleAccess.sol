@@ -2,82 +2,6 @@ pragma solidity 0.5.16;
 
 
 /**
- * @dev Interface of the ERC20 standard as defined in the EIP. Does not include
- * the optional functions; to access them see {ERC20Detailed}.
- */
-interface IERC20 {
-    /**
-     * @dev Returns the amount of tokens in existence.
-     */
-    function totalSupply() external view returns (uint256);
-
-    /**
-     * @dev Returns the amount of tokens owned by `account`.
-     */
-    function balanceOf(address account) external view returns (uint256);
-
-    /**
-     * @dev Moves `amount` tokens from the caller's account to `recipient`.
-     *
-     * Returns a boolean value indicating whether the operation succeeded.
-     *
-     * Emits a {Transfer} event.
-     */
-    function transfer(address recipient, uint256 amount) external returns (bool);
-
-    /**
-     * @dev Returns the remaining number of tokens that `spender` will be
-     * allowed to spend on behalf of `owner` through {transferFrom}. This is
-     * zero by default.
-     *
-     * This value changes when {approve} or {transferFrom} are called.
-     */
-    function allowance(address owner, address spender) external view returns (uint256);
-
-    /**
-     * @dev Sets `amount` as the allowance of `spender` over the caller's tokens.
-     *
-     * Returns a boolean value indicating whether the operation succeeded.
-     *
-     * IMPORTANT: Beware that changing an allowance with this method brings the risk
-     * that someone may use both the old and the new allowance by unfortunate
-     * transaction ordering. One possible solution to mitigate this race
-     * condition is to first reduce the spender's allowance to 0 and set the
-     * desired value afterwards:
-     * https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
-     *
-     * Emits an {Approval} event.
-     */
-    function approve(address spender, uint256 amount) external returns (bool);
-
-    /**
-     * @dev Moves `amount` tokens from `sender` to `recipient` using the
-     * allowance mechanism. `amount` is then deducted from the caller's
-     * allowance.
-     *
-     * Returns a boolean value indicating whether the operation succeeded.
-     *
-     * Emits a {Transfer} event.
-     */
-    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
-
-    /**
-     * @dev Emitted when `value` tokens are moved from one account (`from`) to
-     * another (`to`).
-     *
-     * Note that `value` may be zero.
-     */
-    event Transfer(address indexed from, address indexed to, uint256 value);
-
-    /**
-     * @dev Emitted when the allowance of a `spender` for an `owner` is set by
-     * a call to {approve}. `value` is the new allowance.
-     */
-    event Approval(address indexed owner, address indexed spender, uint256 value);
-}
-
-
-/**
  * @title Initializable
  *
  * @dev Helper contract to support initializer functions. To use it, replace
@@ -428,63 +352,289 @@ library BasisPoints {
 }
 
 
-contract LidTimeLock is Initializable, Ownable {
+interface IStakeHandler {
+    function handleStake(address staker, uint stakerDeltaValue, uint stakerFinalValue) external;
+    function handleUnstake(address staker, uint stakerDeltaValue, uint stakerFinalValue) external;
+}
+
+
+interface ILidCertifiableToken {
+    function activateTransfers() external;
+    function activateTax() external;
+    function mint(address account, uint256 amount) external returns (bool);
+    function addMinter(address account) external;
+    function renounceMinter() external;
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function isMinter(address account) external view returns (bool);
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+}
+
+
+contract LidStaking is Initializable, Ownable {
     using BasisPoints for uint;
     using SafeMath for uint;
 
-    uint public releaseInterval;
-    uint public releaseStart;
-    uint public releaseBP;
+    uint256 constant internal DISTRIBUTION_MULTIPLIER = 2 ** 64;
 
-    uint public startingTokens;
-    uint public claimedTokens;
+    uint public stakingTaxBP;
+    uint public unstakingTaxBP;
+    ILidCertifiableToken private lidToken;
 
-    IERC20 private token;
+    mapping(address => uint) public stakeValue;
+    mapping(address => int) public stakerPayouts;
 
-    address releaseWallet;
 
-    modifier onlyAfterStart {
-        require(releaseStart != 0 && now > releaseStart, "Has not yet started.");
+    uint public totalDistributions;
+    uint public totalStaked;
+    uint public totalStakers;
+    uint public profitPerShare;
+    uint private emptyStakeTokens; //These are tokens given to the contract when there are no stakers.
+
+    IStakeHandler[] public stakeHandlers;
+    uint public startTime;
+
+    uint public registrationFeeWithReferrer;
+    uint public registrationFeeWithoutReferrer;
+    mapping(address => uint) public accountReferrals;
+    mapping(address => bool) public stakerIsRegistered;
+
+    event OnDistribute(address sender, uint amountSent);
+    event OnStake(address sender, uint amount, uint tax);
+    event OnUnstake(address sender, uint amount, uint tax);
+    event OnReinvest(address sender, uint amount, uint tax);
+    event OnWithdraw(address sender, uint amount);
+
+    modifier onlyLidToken {
+        require(msg.sender == address(lidToken), "Can only be called by LidToken contract.");
+        _;
+    }
+
+    modifier whenStakingActive {
+        require(startTime != 0 && now > startTime, "Staking not yet started.");
         _;
     }
 
     function initialize(
-        uint _releaseInterval,
-        uint _releaseBP,
+        uint _stakingTaxBP,
+        uint _ustakingTaxBP,
+        uint _registrationFeeWithReferrer,
+        uint _registrationFeeWithoutReferrer,
         address owner,
-        IERC20 _token
+        ILidCertifiableToken _lidToken
     ) external initializer {
-        releaseInterval = _releaseInterval;
-        releaseBP = _releaseBP;
-        token = _token;
-
         Ownable.initialize(msg.sender);
-
+        stakingTaxBP = _stakingTaxBP;
+        unstakingTaxBP = _ustakingTaxBP;
+        lidToken = _lidToken;
+        registrationFeeWithReferrer = _registrationFeeWithReferrer;
+        registrationFeeWithoutReferrer = _registrationFeeWithoutReferrer;
         //Due to issue in oz testing suite, the msg.sender might not be owner
         _transferOwnership(owner);
     }
 
-    function claimToken() external onlyAfterStart {
-        require(releaseStart != 0, "Has not yet started.");
-        uint cycle = getCurrentCycleCount();
-        uint totalClaimAmount = cycle.mul(startingTokens.mulBP(releaseBP));
-        uint toClaim = totalClaimAmount.sub(claimedTokens);
-        if (token.balanceOf(address(this)) < toClaim) toClaim = token.balanceOf(address(this));
-        claimedTokens = claimedTokens.add(toClaim);
-        token.transfer(releaseWallet, toClaim);
+    function registerAndStake(uint amount) public {
+        registerAndStake(amount, address(0x0));
     }
 
-    function startRelease(address _releaseWallet) external onlyOwner {
-        require(releaseStart == 0, "Has already started.");
-        require(token.balanceOf(address(this)) != 0, "Must have some lid deposited.");
-        releaseWallet = _releaseWallet;
-        startingTokens = token.balanceOf(address(this));
-        releaseStart = now.add(24 hours);
+    function registerAndStake(uint amount, address referrer) public whenStakingActive {
+        require(!stakerIsRegistered[msg.sender], "Staker must not be registered");
+        require(lidToken.balanceOf(msg.sender) >= amount, "Must have enough balance to stake amount");
+        uint finalAmount;
+        if(address(0x0) == referrer) {
+            //No referrer
+            require(amount >= registrationFeeWithoutReferrer, "Must send at least enough LID to pay registration fee.");
+            distribute(registrationFeeWithoutReferrer);
+            finalAmount = amount.sub(registrationFeeWithoutReferrer);
+        } else {
+            //has referrer
+            require(amount >= registrationFeeWithReferrer, "Must send at least enough LID to pay registration fee.");
+            require(lidToken.transferFrom(msg.sender, referrer, registrationFeeWithReferrer), "Stake failed due to failed referral transfer.");
+            accountReferrals[referrer] = accountReferrals[referrer].add(1);
+            finalAmount = amount.sub(registrationFeeWithReferrer);
+        }
+        stakerIsRegistered[msg.sender] = true;
+        stake(finalAmount);
     }
 
-    function getCurrentCycleCount() public view returns (uint) {
-        if (now <= releaseStart) return 0;
-        return now.sub(releaseStart).div(releaseInterval).add(1);
+    function stake(uint amount) public whenStakingActive {
+        require(stakerIsRegistered[msg.sender] == true, "Must be registered to stake.");
+        require(amount >= 1e18, "Must stake at least one LID.");
+        require(lidToken.balanceOf(msg.sender) >= amount, "Cannot stake more LID than you hold unstaked.");
+        if (stakeValue[msg.sender] == 0) totalStakers = totalStakers.add(1);
+        uint tax = _addStake(amount);
+        require(lidToken.transferFrom(msg.sender, address(this), amount), "Stake failed due to failed transfer.");
+        emit OnStake(msg.sender, amount, tax);
     }
 
+    function unstake(uint amount) external whenStakingActive {
+        require(amount >= 1e18, "Must unstake at least one LID.");
+        require(stakeValue[msg.sender] >= amount, "Cannot unstake more LID than you have staked.");
+        //must withdraw all dividends, to prevent overflows
+        withdraw(dividendsOf(msg.sender));
+        if (stakeValue[msg.sender] == amount) totalStakers = totalStakers.sub(1);
+        totalStaked = totalStaked.sub(amount);
+        stakeValue[msg.sender] = stakeValue[msg.sender].sub(amount);
+
+        uint tax = findTaxAmount(amount, unstakingTaxBP);
+        uint earnings = amount.sub(tax);
+        _increaseProfitPerShare(tax);
+        stakerPayouts[msg.sender] = uintToInt(profitPerShare.mul(stakeValue[msg.sender]));
+
+        for (uint i=0; i < stakeHandlers.length; i++) {
+            stakeHandlers[i].handleUnstake(msg.sender, amount, stakeValue[msg.sender]);
+        }
+
+        require(lidToken.transferFrom(address(this), msg.sender, earnings), "Unstake failed due to failed transfer.");
+        emit OnUnstake(msg.sender, amount, tax);
+    }
+
+    function withdraw(uint amount) public whenStakingActive {
+        require(dividendsOf(msg.sender) >= amount, "Cannot withdraw more dividends than you have earned.");
+        stakerPayouts[msg.sender] = stakerPayouts[msg.sender] + uintToInt(amount.mul(DISTRIBUTION_MULTIPLIER));
+        lidToken.transfer(msg.sender, amount);
+        emit OnWithdraw(msg.sender, amount);
+    }
+
+    function reinvest(uint amount) external whenStakingActive {
+        require(dividendsOf(msg.sender) >= amount, "Cannot reinvest more dividends than you have earned.");
+        uint payout = amount.mul(DISTRIBUTION_MULTIPLIER);
+        stakerPayouts[msg.sender] = stakerPayouts[msg.sender] + uintToInt(payout);
+        uint tax = _addStake(amount);
+        emit OnReinvest(msg.sender, amount, tax);
+    }
+
+    function distribute(uint amount) public {
+        require(lidToken.balanceOf(msg.sender) >= amount, "Cannot distribute more LID than you hold unstaked.");
+        totalDistributions = totalDistributions.add(amount);
+        _increaseProfitPerShare(amount);
+        require(
+            lidToken.transferFrom(msg.sender, address(this), amount),
+            "Distribution failed due to failed transfer."
+        );
+        emit OnDistribute(msg.sender, amount);
+    }
+
+    function handleTaxDistribution(uint amount) external onlyLidToken {
+        totalDistributions = totalDistributions.add(amount);
+        _increaseProfitPerShare(amount);
+        emit OnDistribute(msg.sender, amount);
+    }
+
+    function dividendsOf(address staker) public view returns (uint) {
+        int divPayout = uintToInt(profitPerShare.mul(stakeValue[staker]));
+        require(divPayout >= stakerPayouts[staker], "dividend calc overflow");
+        return uint(divPayout - stakerPayouts[staker])
+            .div(DISTRIBUTION_MULTIPLIER);
+    }
+
+    function findTaxAmount(uint value, uint taxBP) public pure returns (uint) {
+        return value.mulBP(taxBP);
+    }
+
+    function numberStakeHandlersRegistered() external view returns (uint) {
+        return stakeHandlers.length;
+    }
+
+    function registerStakeHandler(IStakeHandler sc) external onlyOwner {
+        stakeHandlers.push(sc);
+    }
+
+    function unregisterStakeHandler(uint index) external onlyOwner {
+        IStakeHandler sc = stakeHandlers[stakeHandlers.length-1];
+        stakeHandlers.pop();
+        stakeHandlers[index] = sc;
+    }
+
+    function setStakingBP(uint valueBP) external onlyOwner {
+        require(valueBP < 10000, "Tax connot be over 100% (10000 BP)");
+        stakingTaxBP = valueBP;
+    }
+
+    function setUnstakingBP(uint valueBP) external onlyOwner {
+        require(valueBP < 10000, "Tax connot be over 100% (10000 BP)");
+        unstakingTaxBP = valueBP;
+    }
+
+    function setStartTime(uint _startTime) external onlyOwner {
+        startTime = _startTime;
+    }
+
+    function setRegistrationFees(uint valueWithReferrer, uint valueWithoutReferrer) external onlyOwner {
+        registrationFeeWithReferrer = valueWithReferrer;
+        registrationFeeWithoutReferrer = valueWithoutReferrer;
+    }
+
+    function uintToInt(uint val) internal pure returns (int) {
+        if (val >= uint(-1).div(2)) {
+            require(false, "Overflow. Cannot convert uint to int.");
+        } else {
+            return int(val);
+        }
+    }
+
+    function _addStake(uint amount) internal returns (uint tax) {
+        tax = findTaxAmount(amount, stakingTaxBP);
+        uint stakeAmount = amount.sub(tax);
+        totalStaked = totalStaked.add(stakeAmount);
+        stakeValue[msg.sender] = stakeValue[msg.sender].add(stakeAmount);
+        for (uint i=0; i < stakeHandlers.length; i++) {
+            stakeHandlers[i].handleStake(msg.sender, stakeAmount, stakeValue[msg.sender]);
+        }
+        uint payout = profitPerShare.mul(stakeAmount);
+        stakerPayouts[msg.sender] = stakerPayouts[msg.sender] + uintToInt(payout);
+        _increaseProfitPerShare(tax);
+    }
+
+    function _increaseProfitPerShare(uint amount) internal {
+        if (totalStaked != 0) {
+            if (emptyStakeTokens != 0) {
+                amount = amount.add(emptyStakeTokens);
+                emptyStakeTokens = 0;
+            }
+            profitPerShare = profitPerShare.add(amount.mul(DISTRIBUTION_MULTIPLIER).div(totalStaked));
+        } else {
+            emptyStakeTokens = emptyStakeTokens.add(amount);
+        }
+    }
+
+}
+
+
+contract LidSimplifiedPresaleAccess is Initializable {
+    using SafeMath for uint;
+    LidStaking private staking;
+
+    uint[5] private cutoffs;
+
+    function initialize(LidStaking _staking) external initializer {
+        staking = _staking;
+        //Precalculated
+        cutoffs = [
+            500000 ether,
+            100000 ether,
+            50000 ether,
+            25000 ether,
+            1 ether
+        ];
+    }
+
+    function getAccessTime(address account, uint startTime) external view returns (uint accessTime) {
+        uint stakeValue = staking.stakeValue(account);
+        if (stakeValue == 0) return startTime.add(15 minutes);
+        if (stakeValue >= cutoffs[0]) return startTime;
+        uint i=0;
+        uint stake2 = cutoffs[0];
+        while (stake2 > stakeValue && i < cutoffs.length) {
+            i++;
+            stake2 = cutoffs[i];
+        }
+        return startTime.add(i.add(1).mul(3 minutes));
+    }
 }
