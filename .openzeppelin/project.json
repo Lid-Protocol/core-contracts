@@ -1,15 +1,27 @@
 {
   "manifestVersion": "2.2",
-  "contracts": {},
+  "contracts": {
+    "LidTimeLockTeam": "LidTimeLock",
+    "LidTimeLockProject": "LidTimeLock",
+    "ExampleFlashSwap": "ExampleFlashSwap",
+    "ExampleOracleSimple": "ExampleOracleSimple",
+    "LidPromoFund": "LidPromoFund",
+    "LidSimplifiedPresale": "LidSimplifiedPresale",
+    "LidSimplifiedPresaleAccess": "LidSimplifiedPresaleAccess",
+    "LidSimplifiedPresaleRedeemer": "LidSimplifiedPresaleRedeemer",
+    "LidSimplifiedPresaleTimer": "LidSimplifiedPresaleTimer",
+    "LidStaking": "LidStaking",
+    "LidTimeLock": "LidTimeLock",
+    "Migrations": "Migrations",
+    "Token": "Token",
+    "UniswapV2Library": "UniswapV2Library",
+    "UniswapV2Migrator": "UniswapV2Migrator",
+    "UniswapV2Router01": "UniswapV2Router01"
+  },
   "dependencies": {},
   "name": "lid-simplified-presale-contracts",
   "version": "1.0.0",
-  "telemetryOptIn": true,
   "compiler": {
-    "manager": "openzeppelin",
-    "solcVersion": "0.5.16",
-    "artifactsDir": "build/contracts",
-    "contractsDir": "contracts",
     "compilerSettings": {
       "optimizer": {
         "enabled": false,
@@ -18,6 +30,10 @@
     },
     "typechain": {
       "enabled": false
-    }
-  }
+    },
+    "manager": "truffle",
+    "artifactsDir": "build\\contracts",
+    "contractsDir": "contracts"
+  },
+  "telemetryOptIn": false
 }
