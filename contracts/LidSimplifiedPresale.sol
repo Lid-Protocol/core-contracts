@@ -21,6 +21,9 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
 
     uint public referralBP;
 
+    uint public startTime;
+    uint public endTime;
+
     uint public uniswapEthBP;
     uint public lidEthBP;
 
@@ -40,7 +43,6 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
 
     IERC20 private token;
     IUniswapV2Router01 private uniswapRouter;
-    LidSimplifiedPresaleTimer private timer;
     LidSimplifiedPresaleRedeemer private redeemer;
     LidSimplifiedPresaleAccess private access;
     address payable private lidFund;
@@ -54,14 +56,18 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
 
     bool public isRefunding;
 
+    function isStarted() external view returns (bool) {
+        return (startTime != 0 && now > startTime);
+    }
+
     modifier whenPresaleActive {
-        require(timer.isStarted(), "Presale not yet started.");
+        require(isStarted(), "Presale not yet started.");
         require(!isPresaleEnded(), "Presale has ended.");
         _;
     }
 
     modifier whenPresaleFinished {
-        require(timer.isStarted(), "Presale not yet started.");
+        require(isStarted(), "Presale not yet started.");
         require(isPresaleEnded(), "Presale has not yet ended.");
         _;
     }
@@ -73,19 +79,25 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
         uint _referralBP,
         uint _hardcap,
         address owner,
-        LidSimplifiedPresaleTimer _timer,
+        uint _startTime,
+        uint _endTime
         LidSimplifiedPresaleRedeemer _redeemer,
         LidSimplifiedPresaleAccess _access,
         IERC20 _token,
         IUniswapV2Router01 _uniswapRouter,
         address payable _lidFund
     ) external initializer {
+
         Ownable.initialize(msg.sender);
         Pausable.initialize(msg.sender);
+       
         ReentrancyGuard.initialize();
 
         token = _token;
-        timer = _timer;
+
+        startTime = _startTime;
+        endTime = _endTime;
+
         redeemer = _redeemer;
         access = _access;
         lidFund = _lidFund;
@@ -99,11 +111,13 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
         hardcap = _hardcap;
 
         uniswapRouter = _uniswapRouter;
-        totalTokens = token.totalSupply();
-        token.approve(address(uniswapRouter), token.totalSupply());
 
-        //Due to issue in oz testing suite, the msg.sender might not be owner
-        _transferOwnership(owner);
+        // totalTokens = token.totalSupply();
+
+        // token.approve(address(uniswapRouter), token.totalSupply());
+
+        // //Due to issue in oz testing suite, the msg.sender might not be owner
+        // _transferOwnership(owner);
     }
 
     function deposit() external payable whenNotPaused {
@@ -111,10 +125,12 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
     }
 
     function setTokenPools(
+
         uint _uniswapTokenBP,
         uint _presaleTokenBP,
         address[] calldata _tokenPools,
         uint[] calldata _tokenPoolBPs
+    
     ) external onlyOwner whenNotPaused {
         require(_tokenPools.length == _tokenPoolBPs.length, "Must have exactly one tokenPool addresses for each BP.");
         delete tokenPools;
@@ -208,12 +224,11 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
     }
 
     function deposit(address payable referrer) public payable nonReentrant whenNotPaused {
-        require(timer.isStarted(), "Presale not yet started.");
-        require(now >= access.getAccessTime(msg.sender, timer.startTime()), "Time must be at least access time.");
+        require(now >= startTime, "Presale not yet started.");
         require(msg.sender != referrer, "Sender cannot be referrer.");
         require(address(this).balance.sub(msg.value) <= hardcap, "Cannot deposit more than hardcap.");
         require(!hasSentToUniswap, "Presale Ended, Uniswap has been called.");
-        uint endTime = timer.updateEndTime();
+       
         require(!(now > endTime && endTime != 0), "Presale Ended, time over limit.");
         require(
             redeemer.accountDeposits(msg.sender).add(msg.value) <= maxBuyPerAddress,
@@ -255,11 +270,11 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
     }
 
     function isPresaleEnded() public view returns (bool) {
-        uint endTime =  timer.endTime();
+       
         if (hasSentToUniswap) return true;
         return (
             (address(this).balance >= hardcap) ||
-            (timer.isStarted() && (now > endTime && endTime != 0))
+            (isStarted() && (now > endTime && endTime != 0))
         );
     }
 
