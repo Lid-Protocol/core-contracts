@@ -5,6 +5,7 @@ import "@openzeppelin/upgrades/contracts/Initializable.sol";
 import "@openzeppelin/contracts-ethereum-package/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts-ethereum-package/contracts/ownership/Ownable.sol";
 import "./library/BasisPoints.sol";
+import "./LidSimplifiedPresale.sol";
 
 
 contract LidTimeLock is Initializable, Ownable {
@@ -21,9 +22,12 @@ contract LidTimeLock is Initializable, Ownable {
     IERC20 private token;
 
     address releaseWallet;
+    
+    LidSimplifiedPresale private presale;
 
     modifier onlyAfterStart {
-        require(releaseStart != 0 && now > releaseStart, "Has not yet started.");
+        uint finalEndTime = presale.finalEndTime();
+        require(finalEndTime != 0 && now > finalEndTime, "Has not yet started.");
         _;
     }
 
@@ -31,11 +35,15 @@ contract LidTimeLock is Initializable, Ownable {
         uint _releaseInterval,
         uint _releaseBP,
         address owner,
-        IERC20 _token
+        IERC20 _token,
+        LidSimplifiedPresale _presale,
+        address _releaseWallet
     ) external initializer {
         releaseInterval = _releaseInterval;
         releaseBP = _releaseBP;
         token = _token;
+        presale = _presale;
+        releaseWallet = _releaseWallet;
 
         Ownable.initialize(msg.sender);
 
@@ -44,7 +52,7 @@ contract LidTimeLock is Initializable, Ownable {
     }
 
     function claimToken() external onlyAfterStart {
-        require(releaseStart != 0, "Has not yet started.");
+        startingTokens = token.balanceOf(address(this)).add(claimedTokens);
         uint cycle = getCurrentCycleCount();
         uint totalClaimAmount = cycle.mul(startingTokens.mulBP(releaseBP));
         uint toClaim = totalClaimAmount.sub(claimedTokens);
@@ -53,17 +61,28 @@ contract LidTimeLock is Initializable, Ownable {
         token.transfer(releaseWallet, toClaim);
     }
 
-    function startRelease(address _releaseWallet) external onlyOwner {
-        require(releaseStart == 0, "Has already started.");
-        require(token.balanceOf(address(this)) != 0, "Must have some lid deposited.");
+    function reset(
+        uint _releaseInterval,
+        uint _releaseBP,
+        LidSimplifiedPresale _presale,
+        address _releaseWallet
+    ) external onlyOwner {
+        releaseInterval = _releaseInterval;
+        releaseBP = _releaseBP;
+        presale = _presale;
         releaseWallet = _releaseWallet;
-        startingTokens = token.balanceOf(address(this));
-        releaseStart = now.add(24 hours);
+    }
+
+    function setPresale(
+        LidSimplifiedPresale _presale
+    ) external onlyOwner {
+        presale = _presale;
     }
 
     function getCurrentCycleCount() public view returns (uint) {
-        if (now <= releaseStart) return 0;
-        return now.sub(releaseStart).div(releaseInterval).add(1);
+        uint finalEndTime = presale.finalEndTime();
+        if (now <= finalEndTime || finalEndTime == 0) return 0;
+        return now.sub(finalEndTime).div(releaseInterval).add(1);
     }
 
 }

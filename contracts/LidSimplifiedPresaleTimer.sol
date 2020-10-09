@@ -39,6 +39,10 @@ contract LidSimplifiedPresaleTimer is Initializable, Ownable {
         endTime = time;
     }
 
+    function updateSoftCap(uint valueWei) external onlyOwner {
+        softCap = valueWei;
+    }
+
     function updateEndTime() external returns (uint) {
         if (endTime != 0) return endTime;
         if (presale.balance >= softCap) {

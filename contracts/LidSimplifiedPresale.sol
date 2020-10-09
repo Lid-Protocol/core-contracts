@@ -45,10 +45,13 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
     LidSimplifiedPresaleAccess private access;
     address payable private lidFund;
 
-    mapping(address => uint) public accountEthDeposit;
     mapping(address => uint) public earnedReferrals;
 
     mapping(address => uint) public referralCounts;
+
+    mapping(address => uint) public refundedEth;
+
+    bool public isRefunding;
 
     modifier whenPresaleActive {
         require(timer.isStarted(), "Presale not yet started.");
@@ -151,12 +154,18 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
         require(hasSentToUniswap, "Has not yet sent to Uniswap.");
         require(!hasIssuedTokens, "Has already issued tokens.");
         hasIssuedTokens = true;
-        for (uint i = 0; i < tokenPools.length; ++i) {
+        uint last = tokenPools.length.sub(1);
+        for (uint i = 0; i < last; ++i) {
             token.transfer(
                 tokenPools[i],
                 totalTokens.mulBP(tokenPoolBPs[i])
             );
         }
+        // in case rounding error, send all to final
+        token.transfer(
+            tokenPools[last],
+            totalTokens.mulBP(tokenPoolBPs[last])
+        );
     }
 
     function releaseEthToAddress(address payable receiver, uint amount) external onlyOwner whenNotPaused returns(uint) {
@@ -171,34 +180,77 @@ contract LidSimplifiedPresale is Initializable, Ownable, ReentrancyGuard, Pausab
         token.transfer(msg.sender, claimable);
     }
 
-    function deposit(address payable referrer) public payable whenPresaleActive nonReentrant whenNotPaused {
+    function startRefund() external onlyOwner {
+        //TODO: Automatically start refund after timer is passed for softcap reach
+        pause();
+        isRefunding = true;
+    }
+
+    function topUpRefundFund() external payable onlyOwner {
+
+    }
+
+    function claimRefund(address payable account) external whenPaused {
+        require(isRefunding, "Refunds not active");
+        uint refundAmt = getRefundableEth(account);
+        require(refundAmt > 0, "Nothing to refund");
+        refundedEth[account] = refundedEth[account].add(refundAmt);
+        account.transfer(refundAmt);
+    }
+
+    function updateHardcap(uint valueWei) external onlyOwner {
+        hardcap = valueWei;
+    }
+
+    function updateMaxBuy(uint valueWei) external onlyOwner {
+        maxBuyPerAddress = valueWei;
+    }
+
+    function deposit(address payable referrer) public payable nonReentrant whenNotPaused {
+        require(timer.isStarted(), "Presale not yet started.");
         require(now >= access.getAccessTime(msg.sender, timer.startTime()), "Time must be at least access time.");
-        uint endTime = timer.updateEndTime();
-        require(endTime == 0 || endTime >= now, "Endtime past.");
         require(msg.sender != referrer, "Sender cannot be referrer.");
-        uint accountCurrentDeposit = redeemer.accountDeposits(msg.sender);
-        uint fee = msg.value.mulBP(referralBP);
-        //Remove fee in case final purchase needed to end sale without dust errors
-        if (msg.value < 0.01 ether) fee = 0;
+        require(address(this).balance.sub(msg.value) <= hardcap, "Cannot deposit more than hardcap.");
+        require(!hasSentToUniswap, "Presale Ended, Uniswap has been called.");
+        uint endTime = timer.updateEndTime();
+        require(!(now > endTime && endTime != 0), "Presale Ended, time over limit.");
         require(
-            accountCurrentDeposit.add(msg.value) <= getMaxWhitelistedDeposit(),
-            "Deposit exceeds max buy per address for whitelisted addresses."
+            redeemer.accountDeposits(msg.sender).add(msg.value) <= maxBuyPerAddress,
+            "Deposit exceeds max buy per address."
         );
-        require(address(this).balance.sub(fee) <= hardcap, "Cannot deposit more than hardcap.");
 
-        redeemer.setDeposit(msg.sender, msg.value.sub(fee), address(this).balance.sub(fee));
+        uint fee = msg.value.mulBP(referralBP);
+        uint depositEther = msg.value;
+        uint excess = 0;
 
-        if (referrer != address(0x0) && referrer != msg.sender) {
-            earnedReferrals[referrer] = earnedReferrals[referrer].add(fee);
-            referralCounts[referrer] = referralCounts[referrer].add(1);
-            referrer.transfer(fee);
+        //Remove fee and refund eth in case final purchase needed to end sale without dust errors
+        if (address(this).balance > hardcap) {
+            fee = 0;
+            excess = address(this).balance.sub(hardcap);
+            depositEther = depositEther.sub(excess);
+        }
+
+        redeemer.setDeposit(msg.sender, depositEther.sub(fee), address(this).balance.sub(fee));
+
+        if (excess == 0) {
+            if (referrer != address(0x0) && referrer != msg.sender) {
+                earnedReferrals[referrer] = earnedReferrals[referrer].add(fee);
+                referralCounts[referrer] = referralCounts[referrer].add(1);
+                referrer.transfer(fee);
+            } else {
+                lidFund.transfer(fee);
+            }
         } else {
-            lidFund.transfer(fee);
+            msg.sender.transfer(excess);
         }
     }
 
-    function getMaxWhitelistedDeposit() public view returns (uint) {
-        return maxBuyPerAddress;
+    function getRefundableEth(address account) public view returns (uint) {
+        if (!isRefunding) return 0;
+        //TODO: use account eth deposits insted once switched to referral withdraw pattern
+        return redeemer.accountDeposits(account)
+            .divBP(10000 - referralBP)
+            .sub(refundedEth[account]);
     }
 
     function isPresaleEnded() public view returns (bool) {
